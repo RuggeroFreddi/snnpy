@@ -1,15 +1,21 @@
 from setuptools import setup, find_packages
+from pathlib import Path
+
+# Read README.md content safely
+this_dir = Path(__file__).parent
+long_description = (this_dir / "README.md").read_text(encoding="utf-8")
 
 setup(
-    name='snnpy',
-    version='0.1.0',
-    author='Ruggero Freddi',
-    author_email='info@ruggerofreddi.it',
-    description='Simulation and analysis of Spiking Neural Networks (SNNs)',
-    long_description=open('README.md').read(),
-    long_description_content_type='text/markdown',
-    url='https://github.com/RuggeroFreddi/snnpy',
+    name="snnpy",
+    version="0.1.0",
+    author="Ruggero Freddi",
+    author_email="info@ruggerofreddi.it",
+    description="Simulation and analysis of Spiking Neural Networks (SNNs)",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
+    url="https://github.com/RuggeroFreddi/snnpy",
     packages=find_packages(),
+    license="MIT",
     install_requires=[
         "numpy>=1.22,<1.27",
         "scipy>=1.8,<1.13",
@@ -24,5 +30,5 @@ setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3.7',
+    python_requires=">=3.7",
 )
