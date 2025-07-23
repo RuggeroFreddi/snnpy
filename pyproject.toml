@@ -1,33 +1,3 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[project]
-name = "snnpy"
-version = "0.1.0"
-description = "Simulation and analysis of Spiking Neural Networks (SNNs)"
-readme = "README.md"
-authors = [
-  { name = "Ruggero Freddi", email = "info@ruggerofreddi.it" }
-]
-license = "MIT"
-requires-python = ">=3.7"
-dependencies = [
-  "numpy>=1.22,<1.27",
-  "scipy>=1.8,<1.13",
-  "networkx>=2.6,<3.3",
-  "pandas>=1.3,<2.3",
-  "scikit-learn>=1.1,<1.5",
-  "matplotlib>=3.5,<3.9",
-  "seaborn>=0.11,<0.13"
-]
-classifiers = [
-  "Programming Language :: Python :: 3",
-  "Operating System :: OS Independent"
-]
-
-[tool.setuptools.packages.find]
-include = ["snnpy"]
-
-[tool.setuptools]
-license-files = []
