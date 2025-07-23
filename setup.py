@@ -15,7 +15,6 @@ setup(
     url="https://github.com/RuggeroFreddi/snnpy",
     packages=find_packages(),
     license="MIT",
-    license_files=["LICENSE"],  # ✅ AGGIUNGI QUESTA RIGA
     install_requires=[
         "numpy>=1.22,<1.27",
         "scipy>=1.8,<1.13",
