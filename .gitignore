@@ -16,3 +16,6 @@ build/
 # IDEs
 .vscode/
 .idea/
+
+.pypirc
+
