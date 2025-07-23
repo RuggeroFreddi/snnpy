@@ -6,15 +6,14 @@
 ```bash 
 pip install snnpy
 ```
-
-This class implements a **Spiking Neural Network (SNN)** model based on **LIF neurons** and a **reservoir** architecture, with a **small-world** topology generated using the Watts-Strogatz model. The typical operational flow is as follows:
+This class implements a **Spiking Neural Network (SNN)** model based on **LIF neurons** and a **reservoir** architecture, with either a **small-world** topology generated using the **Watts-Strogatz model**, or a **random-uniform** topology generated using an **Erdős–Rényi model**. The typical operational flow is as follows:
 
 1. **Instantiate** an SNN network.
 2. **Provide** a binary matrix `input_spike_times` with shape `(num_input_neurons, time_steps)` where `1` indicates stimulation of an input neuron at a specific time.
-3. At each timestep, a **threshold-level current** is injected into the activated input neurons.
+3. At each timestep, a **current** is injected into the activated input neurons.
 
-> ⚠️ **Input neurons** are randomly selected from the first few neurons, with their count equal to the number of rows in `input_spike_times`.  
-> ⚠️ **Output neurons** are randomly selected from the hidden neurons, but can also be manually specified by passing an index array to `set_output_neurons()`.
+> ⚠️ **Input neurons** are randomly selected, with their count equal to the number of rows in `input_spike_times`.  
+> ⚠️ **Output neurons** are randomly selected from the hidden neurons (non input neurons), but can also be manually specified by passing an index array to `set_output_neurons()`.
 
 ---
 
@@ -63,17 +62,16 @@ This class implements a **Spiking Neural Network (SNN)** model based on **LIF ne
   The array must be 1D with length equal to the number of neurons (`num_neurons`).
 
 - `set_output_neurons(indices)`  
-  Manually sets the output neurons by specifying their indices (array of integers).  
-  Validates that the indices are within bounds (`0 ≤ index < num_neurons`).
+  Sets the output neurons by specifying their indices (array of integers).  
 
 - `reset()`  
   Resets the internal state of the network to allow for a new simulation.  
-  Restores initial membrane potentials, clears spike matrix, spike count, and refractory timers, while preserving all other parameters (topology, output neurons, etc.).
+  Restores initial membrane potentials, clears spike matrix, spike count, and refractory timers, while preserving all other parameters (`adjacency_matrix`, `output_neurons`, etc.).
 
 ---
 
 ### 📈 Feature Extraction (after simulation)
-Each feature extraction method returns a one-dimensional NumPy array (`np.ndarray`) containing one feature per output neuron.
+Each feature extraction method returns a one-dimensional NumPy array (`np.ndarray`) containing one feature per output neuron, except `extract_features_from_spikes()`, which returns a two-dimensional array with multiple features per neuron.
 
 - `extract_features_from_spikes()`  
   Extracts all the main features from the output neurons (spike count, entropy, ISI, etc.)
