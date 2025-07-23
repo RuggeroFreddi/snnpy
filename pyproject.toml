@@ -28,3 +28,6 @@ classifiers = [
 
 [tool.setuptools.packages.find]
 include = ["snnpy"]
+
+[tool.setuptools]
+license-files = []
