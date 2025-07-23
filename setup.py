@@ -1,7 +1,6 @@
 from setuptools import setup, find_packages
 from pathlib import Path
 
-# Read README.md content safely
 this_dir = Path(__file__).parent
 long_description = (this_dir / "README.md").read_text(encoding="utf-8")
 
@@ -16,6 +15,7 @@ setup(
     url="https://github.com/RuggeroFreddi/snnpy",
     packages=find_packages(),
     license="MIT",
+    license_files=["LICENSE"],  # ✅ AGGIUNGI QUESTA RIGA
     install_requires=[
         "numpy>=1.22,<1.27",
         "scipy>=1.8,<1.13",
