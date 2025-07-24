@@ -9,7 +9,7 @@ from typing import List, Optional
 import numpy as np
 import networkx as nx
 from scipy.sparse import issparse, save_npz, load_npz, csr_matrix, spmatrix
-
+from scipy.ndimage import label
 
 
 DEFAULT_MATRIX_PATH = "dati/snn_matrices.npz"
@@ -543,6 +543,16 @@ class SNN:
         return isi_vars
 
     @require_simulation_run
+    def get_burst_counts(self) -> np.ndarray:
+        """Return the number of spike bursts per output neuron."""
+        burst_counts = np.zeros(self.num_output_neurons, dtype=int)
+        for i in range(self.num_output_neurons):
+            spike_train = self.spike_matrix_output[:, i]
+            _, num_bursts = label(spike_train)
+            burst_counts[i] = num_bursts
+        return burst_counts
+    
+    @require_simulation_run
     def extract_features_from_spikes(self) -> dict:
         """Extract all key features from output neurons as a dictionary."""
         return {
@@ -553,6 +563,7 @@ class SNN:
             "last_spike_times": self.get_last_spike_times(),
             "mean_isi": self.get_mean_isi_per_neuron(),
             "isi_variances": self.get_isi_variance_per_neuron(),
+            "burst_counts": self.get_burst_counts(),  # ✅ aggiunto
         }
         
     def save_topology(self, filename: str = DEFAULT_MATRIX_PATH) -> None:

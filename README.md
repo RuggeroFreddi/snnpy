@@ -103,6 +103,9 @@ Each feature extraction method returns a one-dimensional NumPy array (`np.ndarra
 - `get_spike_histogram_moments()`  
   Mean, skewness, and kurtosis of the spike time histogram.
 
+- `get_burst_counts()`  
+  Number of bursts per neuron. A burst is defined as a contiguous sequence of spikes (value 1) in the neuron's spike train. Useful for assessing the frequency of temporally clustered activity.
+
 ---
 
 ### 🧪 Utility
