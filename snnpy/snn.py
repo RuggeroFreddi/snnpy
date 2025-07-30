@@ -569,8 +569,6 @@ class SNN:
     def save_topology(self, filename: str = DEFAULT_MATRIX_PATH) -> None:
         """Save synaptic weights matrix to .npz file."""
         save_npz(filename, self.synaptic_weights)
-        print(f"✅ Matrices saved to '{filename}'")
-
 
     def load_topology(self, filename: str = DEFAULT_MATRIX_PATH) -> None:
         """Load synaptic weights matrix from .npz file."""

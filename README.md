@@ -48,13 +48,13 @@ This class implements a **Spiking Neural Network (SNN)** model based on **LIF ne
 - `simulate()`  
   Runs the simulation for the full duration and returns a 2D NumPy array (`np.ndarray`):
   
-  - A binary matrix of shape `[time × output_neurons]`, where each row represents a timestep and each column an output neuron. The entry is `1` if the neuron spiked at that time, `0` otherwise.
+  - A binary matrix of shape `[output_neurons x time]`, where each row represents a timestep and each column an output neuron. The entry is `1` if the neuron spiked at that time, `0` otherwise.
 
 - `get_spike_time_lists_output()`  
   Returns a list of lists: each sublist contains the timesteps at which each output neuron generated a spike.
 
 - `set_input_spike_times(input_spike_times)`  
-  Sets the binary input spike matrix (shape `[input_neurons (0/1) × time]`).  
+  Sets the binary input spike matrix (shape `[time x input_neurons (0/1)]`).  
   Automatically updates the simulation duration (`duration`) if not already set.
 
 - `set_membrane_potentials(membrane_potentials)`  
