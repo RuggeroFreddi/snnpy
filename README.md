@@ -54,7 +54,7 @@ This class implements a **Spiking Neural Network (SNN)** model based on **LIF ne
   Returns a list of lists: each sublist contains the timesteps at which each output neuron generated a spike.
 
 - `set_input_spike_times(input_spike_times)`  
-  Sets the binary input spike matrix (shape `[time x input_neurons (0/1)]`).  
+  Sets the binary input spike matrix (shape `[input_neurons (0/1) x time]`).  
   Automatically updates the simulation duration (`duration`) if not already set.
 
 - `set_membrane_potentials(membrane_potentials)`  
