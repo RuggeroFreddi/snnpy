@@ -1,5 +1,10 @@
 # 🧠 Spiking Neural Network (SNN) – Reservoir Model
 
+[![PyPI version](https://img.shields.io/pypi/v/snn-reservoir-py.svg)](https://pypi.org/project/snn-reservoir-py/)
+[![Python version](https://img.shields.io/pypi/pyversions/snn-reservoir-py.svg)](https://pypi.org/project/snn-reservoir-py/)
+[![License](https://img.shields.io/github/license/RuggeroFreddi/snnpy)](./_LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/RuggeroFreddi/snnpy)](https://github.com/RuggeroFreddi/snnpy/commits/main)
+
 > Library available on [PyPI](https://pypi.org/project/snnpy/)  
 > ✅ Installable directly with:
 
