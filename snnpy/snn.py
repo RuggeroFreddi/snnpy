@@ -17,6 +17,72 @@ DEFAULT_POTENTIALS_PATH = "dati/membrane_potentials.npy"
 DEFAULT_OUTPUT_NEURONS_PATH = "dati/output_neurons.npy"
 
 
+from dataclasses import dataclass
+
+@dataclass
+class STDPParams:
+    enabled: bool = True
+    tau_plus: float = 0.02
+    tau_minus: float = 0.04
+    A_plus: float = 1e-3
+    A_minus: float = 1e-3
+    eta: float = 1.0
+    W_max: float = 1.0
+    clip: bool = True
+    nearest_neighbor: bool = False
+    lock_A_minus: bool = False  # auto-set A_minus for zero-drift
+
+    def __post_init__(self):
+        # --- type checks for booleans ---
+        for name, val in [
+            ("enabled", self.enabled),
+            ("clip", self.clip),
+            ("nearest_neighbor", self.nearest_neighbor),
+            ("lock_A_minus", self.lock_A_minus),
+        ]:
+            if not isinstance(val, bool):
+                raise TypeError(f"'{name}' must be a bool.")
+
+        # --- numeric type/finite checks ---
+        for name, val in [
+            ("tau_plus", self.tau_plus),
+            ("tau_minus", self.tau_minus),
+            ("A_plus", self.A_plus),
+            ("A_minus", self.A_minus),
+            ("eta", self.eta),
+            ("W_max", self.W_max),
+        ]:
+            if not isinstance(val, (int, float)):
+                raise TypeError(f"'{name}' must be a float or int.")
+            if not np.isfinite(val):
+                raise ValueError(f"'{name}' must be finite.")
+
+        # --- range checks ---
+        if self.tau_plus <= 0:
+            raise ValueError("'tau_plus' must be > 0.")
+        if self.tau_minus <= 0:
+            raise ValueError("'tau_minus' must be > 0.")
+        if self.A_plus < 0:
+            raise ValueError("'A_plus' must be >= 0.")
+        if self.A_minus < 0:
+            raise ValueError("'A_minus' must be >= 0.")
+        if self.eta < 0:
+            raise ValueError("'eta' must be >= 0.")
+        if self.W_max <= 0:
+            raise ValueError("'W_max' must be > 0.")
+
+        # --- lock_A_minus: force zero-drift A_minus and warn if user tried to set it ---
+        if self.lock_A_minus:
+            target = float(self.A_plus) * (float(self.tau_plus) / float(self.tau_minus))
+            # If user supplied a different A_minus, ignore it but warn.
+            if not np.isclose(self.A_minus, target, rtol=0.0, atol=max(1e-12, 1e-6 * abs(target))):
+                warnings.warn(
+                    "lock_A_minus=True: ignoring provided 'A_minus' "
+                    "and setting A_minus = A_plus * (tau_plus / tau_minus) for zero-drift.",
+                    category=UserWarning,
+                )
+            self.A_minus = target
+
 @dataclass
 class SimulationParams:
     """Parameters for running the Spiking Neural Network (SNN) simulation."""
@@ -251,7 +317,7 @@ def require_simulation_run(method):
 class SNN:
     """Implements a Spiking Neural Network (SNN) with customizable topology and simulation features."""
 
-    def __init__(self, simulation_params: SimulationParams) -> None:
+    def __init__(self, simulation_params: SimulationParams, stdp_params: Optional[STDPParams]=None) -> None:
         self.simulation_params = simulation_params
 
         # === Configuration from simulation parameters ===
@@ -345,6 +411,79 @@ class SNN:
         self.spike_matrix: Optional[np.ndarray] = None
         self.spike_matrix_output: Optional[np.ndarray] = None
         self.refractory_timer: np.ndarray = np.zeros(self.num_neurons)
+
+        self.stdp = stdp_params
+        if self.stdp and self.stdp.enabled:
+            self._init_stdp()
+
+
+    def _init_stdp(self):
+        self.x_pre  = np.zeros(self.num_neurons, dtype=np.float32)
+        self.x_post = np.zeros(self.num_neurons, dtype=np.float32)
+        self._decay_pre  = float(np.exp(-self.time_step / self.stdp.tau_plus))
+        self._decay_post = float(np.exp(-self.time_step / self.stdp.tau_minus))
+        self._build_in_neighbors()
+
+    def _build_in_neighbors(self):
+        """Precalcola, per ogni colonna i, la lista dei j con W[j,i] != 0."""
+        W = self.synaptic_weights
+        rows, cols = W.nonzero()   
+        self.in_neigh = [[] for _ in range(W.shape[1])]
+        for j, i in zip(rows, cols):
+            self.in_neigh[i].append(j)
+        self.in_neigh = [np.array(js, dtype=np.int32) for js in self.in_neigh]
+
+    def _stdp_decay_traces(self):
+        self.x_pre  *= self._decay_pre
+        self.x_post *= self._decay_post
+        if self.stdp.nearest_neighbor:
+            np.minimum(self.x_pre,  1.0, out=self.x_pre)
+            np.minimum(self.x_post, 1.0, out=self.x_post)
+
+    def _stdp_on_pre(self, pre_idx: np.ndarray):
+        """Evento: spike PRE j → LTD su archi j→i (righe CSR)."""
+        if pre_idx.size == 0:
+            return
+        W: csr_matrix = self.synaptic_weights
+        data, indptr, indices = W.data, W.indptr, W.indices
+        eta, A_minus, W_max = self.stdp.eta, self.stdp.A_minus, self.stdp.W_max
+
+        for j in pre_idx:
+            start, end = indptr[j], indptr[j+1]
+            cols = indices[start:end]  
+            if cols.size == 0:
+                continue
+            wrow = data[start:end]
+            # LTD moltiplicativa: -eta*A- * x_post[i] * (w/Wmax)
+            delta = -eta * A_minus * self.x_post[cols] * (wrow / W_max)
+            wrow += delta
+            if self.stdp.clip:
+                np.clip(wrow, 0.0, W_max, out=wrow)
+            data[start:end] = wrow  
+
+    def _stdp_on_post(self, post_idx: np.ndarray):
+        """Evento: spike POST i → LTP su archi j→i (usa liste dei presinaptici di i)."""
+        if post_idx.size == 0:
+            return
+        W: csr_matrix = self.synaptic_weights
+        data, indptr, indices = W.data, W.indptr, W.indices
+        eta, A_plus, W_max = self.stdp.eta, self.stdp.A_plus, self.stdp.W_max
+
+        for i in post_idx:
+            js = self.in_neigh[i]         
+            for j in js:
+                start, end = indptr[j], indptr[j+1]
+                cols = indices[start:end]
+                pos = np.searchsorted(cols, i)
+                if pos < cols.size and cols[pos] == i:
+                    w = data[start + pos]
+                    # LTP moltiplicativa: +eta*A+ * x_pre[j] * (1 - w/Wmax)
+                    dw = eta * A_plus * self.x_pre[j] * (1.0 - w / W_max)
+                    w = w + dw
+                    if self.stdp.clip:
+                        if w < 0.0: w = 0.0
+                        elif w > W_max: w = W_max
+                    data[start + pos] = w
 
     def _generate_synaptic_weights_small_world(
         self,
@@ -454,6 +593,21 @@ class SNN:
 
             self.spike_matrix[t, :] = spiking_neurons
             self.tot_spikes += np.count_nonzero(spiking_neurons)
+
+            spk_idx = np.flatnonzero(spiking_neurons)
+            if self.stdp and self.stdp.enabled:
+                self._stdp_decay_traces()
+                if spk_idx.size > 0:
+                    # 1) aggiorna i pesi usando le tracce "vecchie" → Δt=0 neutro
+                    self._stdp_on_pre(spk_idx)
+                    self._stdp_on_post(spk_idx)
+
+                    # 2) poi aggiorna le tracce
+                    self.x_pre[spk_idx] += 1.0
+                    self.x_post[spk_idx] += 1.0
+                    if self.stdp.nearest_neighbor:
+                        np.minimum(self.x_pre, 1.0, out=self.x_pre)
+                        np.minimum(self.x_post, 1.0, out=self.x_post)
 
             self.membrane_potentials[spiking_neurons] = 0
             self.refractory_timer[spiking_neurons] = self.refractory_period + 1
@@ -571,8 +725,14 @@ class SNN:
         save_npz(filename, self.synaptic_weights)
 
     def load_topology(self, filename: str = DEFAULT_MATRIX_PATH) -> None:
-        """Load synaptic weights matrix from .npz file."""
-        self.synaptic_weights = load_npz(filename)
+        """Load synaptic weights matrix from a .npz file."""
+        W = load_npz(filename).tocsr()
+        W.sort_indices()
+        self.synaptic_weights = W
+
+        if self.stdp and self.stdp.enabled:
+            self._build_in_neighbors()
+
         self.num_neurons = self.synaptic_weights.shape[0]
         in_degrees = self.synaptic_weights.getnnz(axis=0)
         self.mean_in_degree = in_degrees.mean()
@@ -583,14 +743,21 @@ class SNN:
 
     def set_topology(self, topology) -> None:
         """Set synaptic weights matrix."""
-        self.synaptic_weights = topology.copy()
-        self.num_neurons = self.synaptic_weights.shape[0]
-        in_degrees = self.synaptic_weights.getnnz(axis=0)
+        W = topology.tocsr(copy=True) if issparse(topology) else csr_matrix(topology)
+        W.sort_indices()
+        self.synaptic_weights = W
+
+        if self.stdp and self.stdp.enabled:
+            self._build_in_neighbors()
+
+        self.num_neurons = W.shape[0]
+        in_degrees = W.getnnz(axis=0)
         self.mean_in_degree = in_degrees.mean()
 
-        weights_array = self.synaptic_weights.data
+        weights_array = W.data
         self.weights_mean = float(np.mean(weights_array))
         self.weights_variance = float(np.var(weights_array))
+
 
     def get_topology(self) -> csr_matrix:
         return self.synaptic_weights.copy()
@@ -659,7 +826,31 @@ class SNN:
         if total_intervals:
             return float(np.mean(total_intervals))
         return float(self.simulation_duration)
+    
+    def rescale_synaptic_weights_to_mean(self, target_mean: float) -> None:
+        """Scale non-zero synaptic weights so their mean equals target_mean."""
+        if not hasattr(self, "synaptic_weights"):
+            raise ValueError("Synaptic weights not initialized.")
+        if not np.isfinite(target_mean):
+            raise ValueError("'target_mean' must be finite.")
 
+        data = self.synaptic_weights.data
+        if data.size == 0:
+            raise ValueError("Synaptic weights matrix has no non-zero entries.")
+
+        current_mean = float(np.mean(data))
+        if current_mean == 0.0:
+            if target_mean == 0.0:
+                self.weights_mean = 0.0
+                self.weights_variance = float(np.var(data))
+                return
+            raise ValueError("Cannot rescale from zero current mean to a non-zero target.")
+
+        scale = float(target_mean) / current_mean
+        self.synaptic_weights.data *= scale 
+        weights_array = self.synaptic_weights.data
+        self.weights_mean = float(np.mean(weights_array))
+        self.weights_variance = float(np.var(weights_array))
 
     def reset_synaptic_weights(self, mean: float, std: Optional[float] = None) -> None:
         """Reset synaptic weights with new normal distribution."""
@@ -669,13 +860,20 @@ class SNN:
         if std is None:
             std = 0.1
 
-        rows, cols = self.synaptic_weights.nonzero()
-        new_weights = np.random.normal(loc=mean, scale=std * mean, size=len(rows))
+        # Usa la struttura sparsity esistente (stesse posizioni non-nulle)
+        W_old = self.synaptic_weights.tocsr()
+        rows, cols = W_old.nonzero()
+        new_weights = np.random.normal(loc=mean, scale=std * mean, size=rows.size)
 
-        self.synaptic_weights = csr_matrix(
-            (new_weights, (rows, cols)),
-            shape=self.synaptic_weights.shape
-        )
+        W_new = csr_matrix((new_weights, (rows, cols)), shape=W_old.shape)
+        W_new.sort_indices()                 # <-- ordina gli indici CSR
+        self.synaptic_weights = W_new
+
+        # Se STDP è attiva, ricostruisci le liste dei presinaptici
+        if self.stdp and self.stdp.enabled:
+            self._build_in_neighbors()
+
+        # Mantieni le assegnazioni originali
         self.weights_mean = mean
         self.weights_variance = (std * mean) ** 2
 
