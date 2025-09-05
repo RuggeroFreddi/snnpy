@@ -348,17 +348,16 @@ class SNN:
                 else 0.1 * self.weights_mean
             )
 
-            if (
-                simulation_params.is_random_uniform is not None
-                and not simulation_params.is_random_uniform
-            ):
+            if simulation_params.is_random_uniform is True:
+                # Random-uniform
+                self._generate_synaptic_weights_random_uniform(
+                    simulation_params.connection_prob
+                )
+            else:
+                # Small-world (default)
                 self._generate_synaptic_weights_small_world(
                     simulation_params.small_world_graph_p,
                     simulation_params.small_world_graph_k,
-                )
-            else:
-                self._generate_synaptic_weights_random_uniform(
-                    simulation_params.connection_prob
                 )
 
         elif simulation_params.adjacency_matrix is not None:
