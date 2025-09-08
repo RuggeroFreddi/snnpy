@@ -936,6 +936,78 @@ class SNN:
         self.refractory_timer = np.zeros_like(self.membrane_potentials)
         self.membrane_potentials = self.membrane_potentials_init.copy()
 
+    def rescale_synaptic_weights_to_mean(self, target_mean: float) -> float:
+        """Riscala TUTTI i pesi non-zero per ottenere la media target (calcolata sui non-zero).
+        Ritorna il fattore di scala applicato.
+        """
+        if not hasattr(self, "synaptic_weights"):
+            raise ValueError("Synaptic weights not initialized.")
+        if not np.isfinite(target_mean):
+            raise ValueError("'target_mean' must be finite.")
+
+        data = self.synaptic_weights.data  # solo non-zero
+        if data.size == 0:
+            raise ValueError("Synaptic weights matrix has no non-zero entries.")
+
+        current_mean = float(data.mean())  # media sui non-zero
+        if current_mean == 0.0:
+            if target_mean == 0.0:
+                self.weights_mean = 0.0
+                self.weights_variance = float(data.var())
+            raise ValueError("Cannot rescale from zero current mean to a non-zero target.")
+
+        scale = float(target_mean) / current_mean
+        data *= scale
+        self.synaptic_weights.data = data.astype(np.float32, copy=False)
+
+        # aggiorna statistiche coerenti (sempre sui non-zero)
+        wdata = self.synaptic_weights.data
+        self.weights_mean = float(wdata.mean())
+        self.weights_variance = float(wdata.var())
+
+    def prune(self, fraction: float) -> None:
+        """Prune the weakest fraction of synapses (by absolute weight)."""
+        if not isinstance(fraction, (int, float)):
+            raise TypeError("'fraction' must be a number in (0, 1).")
+        fraction = float(fraction)
+        if not (0.0 < fraction < 1.0):
+            raise ValueError("'fraction' must be strictly between 0 and 1.")
+
+        W = self.synaptic_weights  
+        nnz = W.nnz
+        if nnz == 0:
+            return
+
+        # numero di sinapsi da potare (almeno 1 e al più nnz-1)
+        k = int(np.floor(fraction * nnz))
+        k = max(1, min(nnz - 1, k))
+
+        # seleziona gli indici dei k pesi con |w| più piccoli
+        absdata = np.abs(W.data)
+        prune_idx = np.argpartition(absdata, k - 1)[:k]
+
+        # azzera e compatta
+        W.data[prune_idx] = 0.0
+        W.eliminate_zeros()
+        W.sort_indices()
+        W.data = W.data.astype(np.float32, copy=False)
+
+        # aggiorna statistiche coerenti
+        if W.nnz > 0:
+            d = W.data
+            self.weights_mean = float(d.mean())           # media sui non-zero
+            self.weights_variance = float(d.var())
+        else:
+            self.weights_mean = 0.0
+            self.weights_variance = 0.0
+
+        in_deg = W.getnnz(axis=0)
+        self.mean_in_degree = float(in_deg.mean()) if in_deg.size else 0.0
+
+        # ricostruisci liste dei presinaptici se STDP è attiva
+        if self.stdp and self.stdp.enabled:
+            self._build_in_neighbors()
+
 
 def load_output_neurons(filename: str = DEFAULT_OUTPUT_NEURONS_PATH) -> np.ndarray:
     """Load selected output neuron indices from a .npy file."""
