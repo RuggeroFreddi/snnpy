@@ -937,9 +937,7 @@ class SNN:
         self.membrane_potentials = self.membrane_potentials_init.copy()
 
     def rescale_synaptic_weights_to_mean(self, target_mean: float) -> float:
-        """Riscala TUTTI i pesi non-zero per ottenere la media target (calcolata sui non-zero).
-        Ritorna il fattore di scala applicato.
-        """
+        """Rescale all nonzero weights to achieve the target mean (computed over the nonzeros)."""
         if not hasattr(self, "synaptic_weights"):
             raise ValueError("Synaptic weights not initialized.")
         if not np.isfinite(target_mean):
@@ -1007,6 +1005,16 @@ class SNN:
         # ricostruisci liste dei presinaptici se STDP è attiva
         if self.stdp and self.stdp.enabled:
             self._build_in_neighbors()
+
+    def disable_stdp(self) -> None:
+        """Disable STDP and clear its internal buffers."""
+        if self.stdp is None:
+            return
+        self.stdp.enabled = False
+        # drop STDP state to free memory / avoid accidental use
+        for attr in ("x_pre", "x_post", "in_neigh", "in_pos", "_decay_pre", "_decay_post"):
+            if hasattr(self, attr):
+                delattr(self, attr)
 
 
 def load_output_neurons(filename: str = DEFAULT_OUTPUT_NEURONS_PATH) -> np.ndarray:
