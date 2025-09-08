@@ -17,8 +17,6 @@ DEFAULT_POTENTIALS_PATH = "dati/membrane_potentials.npy"
 DEFAULT_OUTPUT_NEURONS_PATH = "dati/output_neurons.npy"
 
 
-from dataclasses import dataclass
-
 @dataclass
 class STDPParams:
     enabled: bool = True
@@ -424,13 +422,29 @@ class SNN:
         self._build_in_neighbors()
 
     def _build_in_neighbors(self):
-        """Precalcola, per ogni colonna i, la lista dei j con W[j,i] != 0."""
-        W = self.synaptic_weights
-        rows, cols = W.nonzero()   
-        self.in_neigh = [[] for _ in range(W.shape[1])]
-        for j, i in zip(rows, cols):
-            self.in_neigh[i].append(j)
-        self.in_neigh = [np.array(js, dtype=np.int32) for js in self.in_neigh]
+        """Per ogni colonna i, pre-calcola:
+        - la lista dei presinaptici js (in_neigh[i])
+        - gli indici in CSR.data da aggiornare (in_pos[i]).
+
+        Complexity: O(M) una volta sola, dove M = #sinapsi.
+        """
+        W: csr_matrix = self.synaptic_weights.tocsr()
+        indptr, indices = W.indptr, W.indices
+        n = W.shape[1]
+
+        in_neigh = [[] for _ in range(n)]
+        in_pos  = [[] for _ in range(n)]
+
+        for j in range(W.shape[0]):
+            start, end = indptr[j], indptr[j+1]
+            cols = indices[start:end]
+            # per ogni sinapsi j->i, salva j e l'indice k in data
+            for off, i in enumerate(cols):
+                in_neigh[i].append(j)
+                in_pos[i].append(start + off)
+
+        self.in_neigh = [np.array(js,  dtype=np.int32) for js in in_neigh]
+        self.in_pos   = [np.array(pos, dtype=np.int32) for pos in in_pos]
 
     def _stdp_decay_traces(self):
         self.x_pre  *= self._decay_pre
@@ -440,49 +454,53 @@ class SNN:
             np.minimum(self.x_post, 1.0, out=self.x_post)
 
     def _stdp_on_pre(self, pre_idx: np.ndarray):
-        """Evento: spike PRE j → LTD su archi j→i (righe CSR)."""
+        """Evento: spike PRE j → LTD su archi j→i (batch su più righe CSR)."""
         if pre_idx.size == 0:
             return
         W: csr_matrix = self.synaptic_weights
         data, indptr, indices = W.data, W.indptr, W.indices
         eta, A_minus, W_max = self.stdp.eta, self.stdp.A_minus, self.stdp.W_max
 
-        for j in pre_idx:
-            start, end = indptr[j], indptr[j+1]
-            cols = indices[start:end]  
-            if cols.size == 0:
-                continue
-            wrow = data[start:end]
-            # LTD moltiplicativa: -eta*A- * x_post[i] * (w/Wmax)
-            delta = -eta * A_minus * self.x_post[cols] * (wrow / W_max)
-            wrow += delta
-            if self.stdp.clip:
-                np.clip(wrow, 0.0, W_max, out=wrow)
-            data[start:end] = wrow  
+        starts = indptr[pre_idx]
+        ends   = indptr[pre_idx + 1]
+        if starts.size == 0:
+            return
+
+        # Costruisci l'array di indici in data per tutte le righe coinvolte
+        idx_blocks = [np.arange(s, e, dtype=np.int32) for s, e in zip(starts, ends) if e > s]
+        if not idx_blocks:
+            return
+        idx = np.concatenate(idx_blocks)
+        cols = indices[idx]
+        wrow = data[idx]
+
+        # LTD moltiplicativa vettoriale
+        delta = -eta * A_minus * self.x_post[cols] * (wrow / W_max)
+        wrow += delta
+        if self.stdp.clip:
+            np.clip(wrow, 0.0, W_max, out=wrow)
+        data[idx] = wrow
 
     def _stdp_on_post(self, post_idx: np.ndarray):
-        """Evento: spike POST i → LTP su archi j→i (usa liste dei presinaptici di i)."""
+        """Evento: spike POST i → LTP su archi j→i (vettorizzato usando in_pos)."""
         if post_idx.size == 0:
             return
         W: csr_matrix = self.synaptic_weights
-        data, indptr, indices = W.data, W.indptr, W.indices
+        data = W.data
         eta, A_plus, W_max = self.stdp.eta, self.stdp.A_plus, self.stdp.W_max
 
         for i in post_idx:
-            js = self.in_neigh[i]         
-            for j in js:
-                start, end = indptr[j], indptr[j+1]
-                cols = indices[start:end]
-                pos = np.searchsorted(cols, i)
-                if pos < cols.size and cols[pos] == i:
-                    w = data[start + pos]
-                    # LTP moltiplicativa: +eta*A+ * x_pre[j] * (1 - w/Wmax)
-                    dw = eta * A_plus * self.x_pre[j] * (1.0 - w / W_max)
-                    w = w + dw
-                    if self.stdp.clip:
-                        if w < 0.0: w = 0.0
-                        elif w > W_max: w = W_max
-                    data[start + pos] = w
+            idxs = self.in_pos[i]    # indici in data da aggiornare
+            if idxs.size == 0:
+                continue
+            js = self.in_neigh[i]    # presinaptici
+            w = data[idxs]
+            # LTP moltiplicativa vettoriale
+            dw = eta * A_plus * self.x_pre[js] * (1.0 - w / W_max)
+            w += dw
+            if self.stdp.clip:
+                np.clip(w, 0.0, W_max, out=w)
+            data[idxs] = w
 
     def _generate_synaptic_weights_small_world(
         self,
@@ -512,9 +530,12 @@ class SNN:
 
         np.fill_diagonal(synaptic_weights, 0)
         self.synaptic_weights = csr_matrix(synaptic_weights)
+        self.synaptic_weights.sort_indices()
+
 
         in_degrees = self.synaptic_weights.getnnz(axis=0)
         self.mean_in_degree = in_degrees.mean()
+        self.synaptic_weights.data = self.synaptic_weights.data.astype(np.float32, copy=False)
 
     def _generate_synaptic_weights_random_uniform(
         self,
@@ -532,9 +553,12 @@ class SNN:
             size=np.count_nonzero(connection_mask),
         )
         self.synaptic_weights = csr_matrix(weights)
+        self.synaptic_weights.sort_indices()
+
 
         in_degrees = self.synaptic_weights.getnnz(axis=0)
         self.mean_in_degree = in_degrees.mean()
+        self.synaptic_weights.data = self.synaptic_weights.data.astype(np.float32, copy=False)
 
     @property
     def avg_in_degree(self):
@@ -739,6 +763,7 @@ class SNN:
         weights_array = self.synaptic_weights.data
         self.weights_mean = float(np.mean(weights_array))
         self.weights_variance = float(np.var(weights_array))
+        self.synaptic_weights.data = self.synaptic_weights.data.astype(np.float32, copy=False)
 
     def set_topology(self, topology) -> None:
         """Set synaptic weights matrix."""
@@ -756,7 +781,7 @@ class SNN:
         weights_array = W.data
         self.weights_mean = float(np.mean(weights_array))
         self.weights_variance = float(np.var(weights_array))
-
+        self.synaptic_weights.data = self.synaptic_weights.data.astype(np.float32, copy=False)
 
     def get_topology(self) -> csr_matrix:
         return self.synaptic_weights.copy()
@@ -806,12 +831,13 @@ class SNN:
     def get_output_neurons(self) -> np.ndarray:
         return self.output_neurons
 
-
     def set_input_spike_times(self, input_spike_times: np.ndarray) -> None:
         """Set input spike times and adjust simulation duration."""
         self.input_spike_times = input_spike_times
         self.simulation_duration = (
-            int(np.max(input_spike_times)) + int(self.num_neurons / 10)
+            self.simulation_params.duration
+            if self.simulation_params.duration is not None
+            else input_spike_times.shape[1]
         )
 
     def calculate_mean_isi(self) -> float:
@@ -867,6 +893,7 @@ class SNN:
         W_new = csr_matrix((new_weights, (rows, cols)), shape=W_old.shape)
         W_new.sort_indices()                 # <-- ordina gli indici CSR
         self.synaptic_weights = W_new
+        self.synaptic_weights.data = self.synaptic_weights.data.astype(np.float32, copy=False)
 
         # Se STDP è attiva, ricostruisci le liste dei presinaptici
         if self.stdp and self.stdp.enabled:
