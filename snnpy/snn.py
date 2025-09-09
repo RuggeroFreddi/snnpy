@@ -1053,6 +1053,43 @@ class SNN:
         for attr in ("x_pre", "x_post", "in_neigh", "in_pos", "_decay_pre", "_decay_post"):
             if hasattr(self, attr):
                 delattr(self, attr)
+                
+    def compute_global_scalar_threshold(self, use_abs_weights: bool = False) -> float:
+        """
+        Calcola la soglia scalare: W̄ * N̄_in + 2*I*Tref
+        - W̄: media dei pesi non-zero sull'intera rete (assoluti se use_abs_weights=True)
+        - N̄_in: grado entrante medio (media dei nnz per colonna)
+        - I: input_mean_current (già calcolata in _recompute_input_mean_current)
+        - Tref: refractory_period
+        """
+        W = self.synaptic_weights
+        if W.nnz == 0:
+            W_mean = 0.0
+            N_mean = 0.0
+        else:
+            data = W.data
+            if use_abs_weights:
+                W_mean = float(np.mean(np.abs(data)))
+            else:
+                W_mean = float(np.mean(data))
+            N_mean = float(W.getnnz(axis=0).mean())  # grado entrante medio
+
+        two_I_Tref = 2.0 * float(self.input_mean_current) * float(self.refractory_period)
+        thr = W_mean * N_mean + two_I_Tref
+        return float(thr)
+
+
+    def apply_global_scalar_threshold(self, use_abs_weights: bool = False) -> float:
+        """
+        Calcola e imposta la soglia scalare globale, disattivando l'autotune per-neurone
+        (thresholds vettoriale). Ritorna il valore impostato.
+        """
+        thr = self.compute_global_scalar_threshold(use_abs_weights=use_abs_weights)
+        self.membrane_threshold = float(thr)
+        # assicura uso scalare in simulate()
+        self.autotune_thresholds = False
+        self.thresholds = None
+        return float(thr)
 
 
 def load_output_neurons(filename: str = DEFAULT_OUTPUT_NEURONS_PATH) -> np.ndarray:
