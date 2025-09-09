@@ -104,6 +104,7 @@ class SimulationParams:
         default_factory=lambda: np.zeros((0, 0), dtype=np.uint8)
     )
     adjacency_matrix: Optional[spmatrix] = None
+    autotune_thresholds: bool = False
 
     def __post_init__(self):
         # === Basic type checks ===
@@ -413,6 +414,41 @@ class SNN:
         if self.stdp and self.stdp.enabled:
             self._init_stdp()
 
+        self.autotune_thresholds: bool = bool(getattr(simulation_params, "autotune_thresholds", False))
+
+        # soglie: scalare (default) o vettore per-neurone se autotune
+        if self.autotune_thresholds:
+            self.thresholds = np.full(self.num_neurons, float(self.membrane_threshold), dtype=np.float32)
+        else:
+            self.thresholds = None
+        self._recompute_input_mean_current()
+    
+    def _recompute_input_mean_current(self) -> None:
+        """Compute mean input current per neuron per time step (I)."""
+        if self.input_spike_times.size == 0:
+            self.input_mean_current = 0.0
+        else:
+            ones = int(np.count_nonzero(self.input_spike_times))
+            self.input_mean_current = float(ones) / float(self.input_spike_times.shape[0] * self.input_spike_times.shape[1])
+
+    def _update_thresholds_from_weights(self) -> None:
+        if not self.autotune_thresholds:
+            return
+        if not hasattr(self, "in_pos"):
+            self._build_in_neighbors()
+
+        data = self.synaptic_weights.data
+        n = self.num_neurons
+
+        counts = np.fromiter((pos.size for pos in self.in_pos), dtype=np.int32, count=n)
+        sums   = np.fromiter((data[pos].sum() if pos.size else 0.0 for pos in self.in_pos), dtype=np.float32, count=n)
+
+        means = np.zeros(n, dtype=np.float32)
+        nz = counts > 0
+        means[nz] = sums[nz] / counts[nz]
+
+        two_I_Tref = 2.0 * float(self.input_mean_current) * float(self.refractory_period)
+        self.thresholds = (means * counts + two_I_Tref).astype(np.float32)
 
     def _init_stdp(self):
         self.x_pre  = np.zeros(self.num_neurons, dtype=np.float32)
@@ -600,17 +636,25 @@ class SNN:
             dtype=np.int8
         )
 
+        if self.autotune_thresholds:
+            self._update_thresholds_from_weights()
+
         for t in range(self.simulation_duration):
             self.refractory_timer -= self.time_step
             np.clip(self.refractory_timer, 0, None, out=self.refractory_timer)
 
             if t < self.input_spike_times.shape[1]:
-                spike_vector = self.input_spike_times[:, t]
-                input_neurons = np.where(spike_vector == 1)[0]
-                self.membrane_potentials[input_neurons] += self.membrane_threshold
+                spike_vector = self.input_spike_times[:, t].astype(np.float32)  # 0/1
+                self.membrane_potentials[:self.num_input_neurons] += self.current_amplitude * spike_vector
+            
+            if self.autotune_thresholds and self.thresholds is not None:
+                thr = self.thresholds
+            else:
+                # usa lo scalare classico
+                thr = self.membrane_threshold
 
             spiking_neurons = (
-                (self.membrane_potentials >= self.membrane_threshold) &
+                (self.membrane_potentials >= thr) &
                 (self.refractory_timer == 0)
             )
 
@@ -631,6 +675,9 @@ class SNN:
                     if self.stdp.nearest_neighbor:
                         np.minimum(self.x_pre, 1.0, out=self.x_pre)
                         np.minimum(self.x_post, 1.0, out=self.x_post)
+            
+                if self.autotune_thresholds:
+                    self._update_thresholds_from_weights()
 
             self.membrane_potentials[spiking_neurons] = 0
             self.refractory_timer[spiking_neurons] = self.refractory_period + 1
@@ -764,6 +811,8 @@ class SNN:
         self.weights_mean = float(np.mean(weights_array))
         self.weights_variance = float(np.var(weights_array))
         self.synaptic_weights.data = self.synaptic_weights.data.astype(np.float32, copy=False)
+        if self.autotune_thresholds:
+            self._update_thresholds_from_weights()
 
     def set_topology(self, topology) -> None:
         """Set synaptic weights matrix."""
@@ -782,6 +831,8 @@ class SNN:
         self.weights_mean = float(np.mean(weights_array))
         self.weights_variance = float(np.var(weights_array))
         self.synaptic_weights.data = self.synaptic_weights.data.astype(np.float32, copy=False)
+        if self.autotune_thresholds:
+            self._update_thresholds_from_weights()
 
     def get_topology(self) -> csr_matrix:
         return self.synaptic_weights.copy()
@@ -826,6 +877,7 @@ class SNN:
     def set_output_neurons(self, indices: np.ndarray) -> None:
         """Manually set the selected output neuron indices."""
         self.output_neurons = indices
+        self.num_output_neurons = len(self.output_neurons)
 
 
     def get_output_neurons(self) -> np.ndarray:
@@ -839,6 +891,12 @@ class SNN:
             if self.simulation_params.duration is not None
             else input_spike_times.shape[1]
         )
+        # ricalcola I = (#1) / (spazio * tempo)
+        self._recompute_input_mean_current()
+        # se attivo, aggiorna le soglie in base ai pesi e al nuovo I
+        if self.autotune_thresholds:
+            self._update_thresholds_from_weights()
+
 
     def calculate_mean_isi(self) -> float:
         """Compute mean inter-spike interval (ISI)."""
@@ -876,6 +934,8 @@ class SNN:
         weights_array = self.synaptic_weights.data
         self.weights_mean = float(np.mean(weights_array))
         self.weights_variance = float(np.var(weights_array))
+        if self.autotune_thresholds:
+            self._update_thresholds_from_weights()
 
     def reset_synaptic_weights(self, mean: float, std: Optional[float] = None) -> None:
         """Reset synaptic weights with new normal distribution."""
@@ -902,6 +962,8 @@ class SNN:
         # Mantieni le assegnazioni originali
         self.weights_mean = mean
         self.weights_variance = (std * mean) ** 2
+        if self.autotune_thresholds:
+            self._update_thresholds_from_weights()
 
     def get_network_parameters(self) -> dict:
         """Return key parameters of the spiking neural network."""
@@ -935,33 +997,6 @@ class SNN:
         self.spike_matrix_output = None
         self.refractory_timer = np.zeros_like(self.membrane_potentials)
         self.membrane_potentials = self.membrane_potentials_init.copy()
-
-    def rescale_synaptic_weights_to_mean(self, target_mean: float) -> float:
-        """Rescale all nonzero weights to achieve the target mean (computed over the nonzeros)."""
-        if not hasattr(self, "synaptic_weights"):
-            raise ValueError("Synaptic weights not initialized.")
-        if not np.isfinite(target_mean):
-            raise ValueError("'target_mean' must be finite.")
-
-        data = self.synaptic_weights.data  # solo non-zero
-        if data.size == 0:
-            raise ValueError("Synaptic weights matrix has no non-zero entries.")
-
-        current_mean = float(data.mean())  # media sui non-zero
-        if current_mean == 0.0:
-            if target_mean == 0.0:
-                self.weights_mean = 0.0
-                self.weights_variance = float(data.var())
-            raise ValueError("Cannot rescale from zero current mean to a non-zero target.")
-
-        scale = float(target_mean) / current_mean
-        data *= scale
-        self.synaptic_weights.data = data.astype(np.float32, copy=False)
-
-        # aggiorna statistiche coerenti (sempre sui non-zero)
-        wdata = self.synaptic_weights.data
-        self.weights_mean = float(wdata.mean())
-        self.weights_variance = float(wdata.var())
 
     def prune(self, fraction: float) -> None:
         """Prune the weakest fraction of synapses (by absolute weight)."""
@@ -1005,6 +1040,9 @@ class SNN:
         # ricostruisci liste dei presinaptici se STDP è attiva
         if self.stdp and self.stdp.enabled:
             self._build_in_neighbors()
+        if self.autotune_thresholds:                 # ⬅️ aggiungi questo
+            self._update_thresholds_from_weights()
+
 
     def disable_stdp(self) -> None:
         """Disable STDP and clear its internal buffers."""
