@@ -897,76 +897,18 @@ class SNN:
         os.makedirs(os.path.dirname(filename) or ".", exist_ok=True)
         np.save(filename, self.membrane_potentials)
 
-    def load_membrane_potentials(self, filename: str = DEFAULT_POTENTIALS_PATH) -> None:
-        """Load membrane potentials from .npy file and validate them."""
-        arr = np.load(filename)
-        arr = np.asarray(arr)
+    def load_membrane_potentials(
+        self,
+        filename: str = DEFAULT_POTENTIALS_PATH
+    ) -> None:
+        """Load membrane potentials from .npy file."""
+        self.membrane_potentials = np.load(filename)
 
-        if arr.ndim != 1:
-            raise ValueError("'membrane_potentials' must be a 1D array.")
-
-        n = getattr(self, "num_neurons", None)
-        if n is None and hasattr(self, "synaptic_weights"):
-            n = self.synaptic_weights.shape[0]
-        if n is not None and arr.size != n:
-            raise ValueError(
-                f"'membrane_potentials' length ({arr.size}) does not match num_neurons ({n})."
-            )
-
-        if not np.all(np.isfinite(arr)):
-            raise ValueError("'membrane_potentials' must be finite values.")
-
-        if not np.issubdtype(arr.dtype, np.floating):
-            arr = arr.astype(np.float32, copy=False)
-
-        thr = float(self.membrane_threshold)
-        if thr > 0:
-            if (arr < 0).any() or (arr > thr).any():
-                raise ValueError("'membrane_potentials' must be in [0, membrane_threshold].")
-        elif thr < 0:
-            if (arr > 0).any() or (arr < thr).any():
-                raise ValueError("'membrane_potentials' must be in [membrane_threshold, 0].")
-
-        self.membrane_potentials = arr.astype(np.float32, copy=True)
-        self.membrane_potentials_init = self.membrane_potentials.copy()
-
-        if not hasattr(self, "refractory_timer") or self.refractory_timer.shape[0] != arr.size:
-            self.refractory_timer = np.zeros(arr.size, dtype=np.int32)
 
     def set_membrane_potentials(self, membrane_potentials: np.ndarray) -> None:
-        """Set membrane potentials from provided array with validation."""
-        arr = np.asarray(membrane_potentials)
-
-        if arr.ndim != 1:
-            raise ValueError("'membrane_potentials' must be a 1D array.")
-        if not np.all(np.isfinite(arr)):
-            raise ValueError("'membrane_potentials' must be finite values.")
-
-        if not np.issubdtype(arr.dtype, np.floating):
-            arr = arr.astype(np.float32, copy=False)
-
-        n = getattr(self, "num_neurons", None)
-        if n is None and hasattr(self, "synaptic_weights"):
-            n = self.synaptic_weights.shape[0]
-        if n is not None and arr.size != n:
-            raise ValueError(
-                f"'membrane_potentials' length ({arr.size}) does not match num_neurons ({n})."
-            )
-
-        thr = float(self.membrane_threshold)
-        if thr > 0:
-            if (arr < 0).any() or (arr > thr).any():
-                raise ValueError("'membrane_potentials' must be in [0, membrane_threshold].")
-        elif thr < 0:
-            if (arr > 0).any() or (arr < thr).any():
-                raise ValueError("'membrane_potentials' must be in [membrane_threshold, 0].")
-
-        self.membrane_potentials = arr.astype(np.float32, copy=True)
-        self.membrane_potentials_init = self.membrane_potentials.copy()
-
-        if not hasattr(self, "refractory_timer") or self.refractory_timer.shape[0] != arr.size:
-            self.refractory_timer = np.zeros(arr.size, dtype=np.int32)
-
+        """Set membrane potentials from provided array."""
+        self.membrane_potentials = membrane_potentials.copy()
+        
     def get_membrane_potentials(self) -> np.ndarray:
         return self.membrane_potentials.copy()
 
