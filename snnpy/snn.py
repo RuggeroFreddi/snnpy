@@ -15,8 +15,9 @@ from scipy.sparse import (
     load_npz,
     save_npz,
     spmatrix,
-    sparse_random,
+    random as sparse_random,  
 )
+
 
 DEFAULT_MATRIX_PATH = "dati/snn_matrices.npz"
 DEFAULT_POTENTIALS_PATH = "dati/membrane_potentials.npy"
