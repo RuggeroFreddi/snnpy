@@ -479,134 +479,93 @@ class SNN:
     def avg_in_degree(self):
         return self.synaptic_weights.getnnz(axis=0).mean()
 
-    def mark_in_neighbors_dirty(self) -> None:
-        """Mark the in-neighbor structures as outdated after topology changes."""
-        if getattr(self.stdp, "enabled", False):
-            return
-        self._in_neighbors_dirty = True
-
-    def _build_in_neighbors_csc(self) -> None:
-        """Build in-neighbor structures using a CSC map of CSR.data positions."""
-        if getattr(self.stdp, "enabled", False):
-            return
-        W = self.synaptic_weights.tocsr()
-        W.sort_indices()
-        W.data = W.data.astype(np.float32, copy=False)
-
-        nnz = W.nnz
-        if nnz == 0:
-            self._in_indptr = np.zeros(W.shape[1] + 1, dtype=np.int32)
-            self._in_indices = np.zeros(0, dtype=np.int32)
-            self._in_pos = np.zeros(0, dtype=np.int32)
-            return
-
-        rows, _ = W.nonzero()  
-        pos_data = np.arange(nnz, dtype=np.int32)
-        Wpos = csr_matrix((pos_data, W.indices.copy(), W.indptr.copy()), shape=W.shape)
-
-        P_csc = Wpos.tocsc(copy=False)
-
-        self._in_indptr = P_csc.indptr.astype(np.int32, copy=False)
-        self._in_indices = P_csc.indices.astype(np.int32, copy=False)
-        self._in_pos = P_csc.data.astype(np.int32, copy=False)
-
-    def _rebuild_in_neighbors_if_dirty(self) -> None:
-        """Rebuild in-neighbor structures only if marked dirty."""
-        if getattr(self.stdp, "enabled", False):
-            return
-        if getattr(self, "_in_neighbors_dirty", True):
-            self._build_in_neighbors_csc()
-            self._in_neighbors_dirty = False
-
-    def _init_stdp(self) -> None:
-        """Initialize or reset STDP traces and rebuild in-neighbors if needed."""
-        if getattr(self.stdp, "enabled", False):
-            return
-        n = self.num_neurons
-        if not hasattr(self, "trace_pre") or self.trace_pre.shape[0] != n:
-            self.trace_pre = np.zeros(n, dtype=np.float32)
-            self.trace_post = np.zeros(n, dtype=np.float32)
-        else:
-            self.trace_pre.fill(0.0)
-            self.trace_post.fill(0.0)
-
+    def _init_stdp(self):
+        """Initialize STDP traces, decays, and in-neighbor structures."""
+        self.trace_pre = np.zeros(self.num_neurons, dtype=np.float32)
+        self.trace_post = np.zeros(self.num_neurons, dtype=np.float32)
         self._decay_pre = float(np.exp(-self.time_step / self.stdp.tau_plus))
         self._decay_post = float(np.exp(-self.time_step / self.stdp.tau_minus))
+        self._build_in_neighbors()
 
-        self._rebuild_in_neighbors_if_dirty()
+
+    def _build_in_neighbors(self):
+        """Precompute in-neighbors and CSR data positions for each postsynaptic column."""
+        weight_matrix: csr_matrix = self.synaptic_weights.tocsr()
+        row_pointer, col_indices = weight_matrix.indptr, weight_matrix.indices
+        num_columns = weight_matrix.shape[1]
+
+        in_neighbors = [[] for _ in range(num_columns)]
+        in_data_positions = [[] for _ in range(num_columns)]
+
+        for pre_neuron in range(weight_matrix.shape[0]):
+            row_start, row_end = row_pointer[pre_neuron], row_pointer[pre_neuron + 1]
+            row_columns = col_indices[row_start:row_end]
+            # For each synapse pre_neuron -> post_neuron, store pre id and index in CSR.data
+            for offset, post_neuron in enumerate(row_columns):
+                in_neighbors[post_neuron].append(pre_neuron)
+                in_data_positions[post_neuron].append(row_start + offset)
+
+        self.in_neigh = [np.array(pre_list, dtype=np.int32) for pre_list in in_neighbors]
+        self.in_pos = [np.array(pos_list, dtype=np.int32) for pos_list in in_data_positions]
+
 
     def _stdp_decay_traces(self):
         """Decay pre/post traces and optionally clip for nearest-neighbor STDP."""
-        if getattr(self.stdp, "enabled", False):
-            return
         self.trace_pre *= self._decay_pre
         self.trace_post *= self._decay_post
         if self.stdp.nearest_neighbor:
             np.minimum(self.trace_pre, 1.0, out=self.trace_pre)
             np.minimum(self.trace_post, 1.0, out=self.trace_post)
 
-    def _stdp_on_pre(self, pre_spike_indices: np.ndarray) -> None:
-        """Apply vectorized LTD on all outgoing synapses of spiking presynaptic neurons."""
-        if getattr(self.stdp, "enabled", False):
+    def _stdp_on_pre(self, pre_spike_indices: np.ndarray):
+        """Handle PRE spikes: apply vectorized LTD on edges j->i (CSR row batches)."""
+        if pre_spike_indices.size == 0:
             return
-        W = self.synaptic_weights.tocsr()
+        W = self.synaptic_weights
         data = W.data
         indptr = W.indptr
         indices = W.indices
-
         c = (self.stdp.eta * self.stdp.A_minus) / self.stdp.W_max
         wmax = self.stdp.W_max
         clip = self.stdp.clip
         post_tr = self.trace_post
+        for j in pre_spike_indices:
+            s, e = indptr[j], indptr[j + 1]
+            if s == e:
+                continue
+            cols = indices[s:e]
+            w = data[s:e]
+            np.multiply(w, 1.0 - c * post_tr[cols], out=w)
+            if clip:
+                np.clip(w, 0.0, wmax, out=w)
 
-        starts = indptr[pre_spike_indices]
-        ends = indptr[pre_spike_indices + 1]
-
-        pos_list = [np.arange(s, e, dtype=np.int32) for s, e in zip(starts, ends) if e > s]
-        if not pos_list:
+    def _stdp_on_post(self, post_spike_indices: np.ndarray):
+        """Handle POST spikes: apply vectorized LTP on edges j->i using precomputed in_pos."""
+        if post_spike_indices.size == 0:
             return
-        pos = np.concatenate(pos_list, dtype=np.int32)
-
-        cols = indices[pos]          
-        w = data[pos]                
-
-        np.multiply(w, 1.0 - c * post_tr[cols], out=w)
-
-        if clip:
-            np.clip(w, 0.0, wmax, out=w)
-
-
-
-    def _stdp_on_post(self, post_spike_indices: np.ndarray) -> None:
-        """Apply vectorized LTP using CSC slices mapped to CSR.data positions."""
-        if getattr(self.stdp, "enabled", False):
-            return
-        data = self.synaptic_weights.data
+        W = self.synaptic_weights
+        data = W.data
         alpha = self.stdp.eta * self.stdp.A_plus
         inv_wmax = 1.0 / self.stdp.W_max
         wmax = self.stdp.W_max
         clip = self.stdp.clip
         pre_tr = self.trace_pre
-
-        indptr = self._in_indptr
-        pre_idx = self._in_indices
-        pos = self._in_pos
-
+        in_pos = self.in_pos
+        in_neigh = self.in_neigh
         for i in post_spike_indices:
-            s = indptr[i]
-            e = indptr[i + 1]
-            if s == e:
+            idxs = in_pos[i]
+            if idxs.size == 0:
                 continue
-            idxs = pos[s:e]                 
-            pre = pre_tr[pre_idx[s:e]]      
-            w = data[idxs] + alpha * pre * (1.0 - data[idxs] * inv_wmax)
+            w = data[idxs]
+            pre = pre_tr[in_neigh[i]]
+            w = w + alpha * pre * (1.0 - w * inv_wmax)
             if clip:
                 np.clip(w, 0.0, wmax, out=w)
             data[idxs] = w
 
     def disable_stdp(self) -> None:
         """Disable STDP and clear its internal buffers."""
-        if getattr(self.stdp, "enabled", False):
+        if self.stdp is None:
             return
         self.stdp.enabled = False
         # Drop STDP state to free memory and avoid accidental use
