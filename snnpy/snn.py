@@ -411,15 +411,14 @@ class SNN:
         # === Internal state ===
         self.tot_spikes: int = 0
         if simulation_params.membrane_potentials is None:
-            self.membrane_potentials: np.ndarray = np.random.uniform(
-                0, self.membrane_threshold, self.num_neurons
-            )
+            thr = float(self.membrane_threshold)
+            lo, hi = (0.0, thr) if thr >= 0.0 else (thr, 0.0)
+            self.membrane_potentials = np.random.uniform(lo, hi, self.num_neurons).astype(np.float32, copy=False)
         else:
             if len(simulation_params.membrane_potentials) != self.num_neurons:
-                raise ValueError(
-                    "Length of 'membrane_potentials' must be equal to 'num_neurons'."
-                )
-            self.membrane_potentials = simulation_params.membrane_potentials
+                raise ValueError("Length of 'membrane_potentials' must be equal to 'num_neurons'.")
+            self.membrane_potentials = simulation_params.membrane_potentials.astype(np.float32, copy=False)
+
 
         self.membrane_potentials_init = self.membrane_potentials.copy()
         self.spike_matrix: Optional[np.ndarray] = None
@@ -500,6 +499,8 @@ class SNN:
 
     def _init_stdp(self):
         """Initialize STDP traces, decays, and in-neighbor structures."""
+        if not getattr(self.stdp, "enabled", False):
+            return
         self.trace_pre = np.zeros(self.num_neurons, dtype=np.float32)
         self.trace_post = np.zeros(self.num_neurons, dtype=np.float32)
         self._decay_pre = float(np.exp(-self.time_step / self.stdp.tau_plus))
@@ -508,6 +509,8 @@ class SNN:
 
     def _build_in_neighbors(self):
         """Precompute in-neighbors and CSR.data positions for each postsynaptic column."""
+        if not getattr(self.stdp, "enabled", False):
+            return
         weight_matrix: csr_matrix = self.synaptic_weights.tocsr()
         row_pointer, col_indices = weight_matrix.indptr, weight_matrix.indices
         num_columns = weight_matrix.shape[1]
@@ -539,6 +542,8 @@ class SNN:
 
     def _stdp_decay_traces(self):
         """Decay pre/post traces and optionally clip for nearest-neighbor STDP."""
+        if not getattr(self.stdp, "enabled", False):
+            return
         self.trace_pre *= self._decay_pre
         self.trace_post *= self._decay_post
         if self.stdp.nearest_neighbor:
@@ -547,6 +552,8 @@ class SNN:
 
     def _stdp_on_pre(self, pre_spike_indices: np.ndarray):
         """Handle PRE spikes: apply vectorized LTD (multiplicative or additive) on edges j->i."""
+        if not getattr(self.stdp, "enabled", False):
+            return
         if pre_spike_indices.size == 0:
             return
         W = self.synaptic_weights
@@ -584,7 +591,7 @@ class SNN:
 
     def _stdp_on_post(self, post_spike_indices: np.ndarray):
         """Handle POST spikes: apply vectorized LTP (multiplicative or additive)."""
-        if post_spike_indices.size == 0:
+        if not getattr(self.stdp, "enabled", False) or post_spike_indices.size == 0:
             return
         W = self.synaptic_weights
         data = W.data
