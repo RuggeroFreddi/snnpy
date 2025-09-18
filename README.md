@@ -9,7 +9,7 @@
 > ✅ Installable directly with:
 
 ```bash 
-pip install snnpy
+pip install snn-reservoir-py==2.0.0
 ```
 This class implements a **Spiking Neural Network (SNN)** model based on **LIF neurons** and a **reservoir** architecture, with either a **small-world** topology generated using the **Watts-Strogatz model**, or a **random-uniform** topology generated using an **Erdős–Rényi model**. The typical operational flow is as follows:
 
