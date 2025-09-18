@@ -40,6 +40,11 @@ Synaptic weights are updated according to either:
 
 where tau_plus/tau_minus are decay constants, A_plus/A_minus are learning amplitudes, η is the learning rate, and W_max is the maximum synaptic weight.
 
+## Example
+
+A minimal end-to-end example is available here:  
+➡️ **Example repo:** https://github.com/RuggeroFreddi/Example-SNNpy
+
 ---
 
 ## ⚙️ Configurable Parameters 
