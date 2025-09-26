@@ -645,7 +645,7 @@ class SNN:
             self.input_mean_current = 0.0
         else:
             num_input_spikes = int(np.count_nonzero(self.input_spike_times))
-            self.input_mean_current = float(num_input_spikes) / float(self.input_spike_times.shape[0] * self.input_spike_times.shape[1])
+            self.input_mean_current = float(num_input_spikes) / float(self.num_neurons * self.input_spike_times.shape[1])
 
     def simulate(self) -> Optional[np.ndarray]:
         """Run the optimized simulation of the SNN."""
