@@ -123,7 +123,7 @@ These methods implement synaptic plasticity (STDP) and homeostatic regulation (t
   Preserves the relative distribution of weights while adapting their global strength.  
   *(Homeostatic mechanism: keeps synaptic activity balanced.)*
 
-- `compute_global_scalar_threshold(use_abs_weights=False)` / `apply_global_scalar_threshold(use_abs_weights=False)`  
+- `compute_critical_threshold(use_abs_weights=False)` / `apply_critical_threshold(use_abs_weights=False)`  
   Compute / apply a recommended firing threshold based on:  
   θ = (mean synaptic weight × mean in-degree) + (2 × input_mean_current × refractory_period).  
   *(see [A Mean-Field Approach to Criticality in Spiking Neural Networks for Reservoir Computing](https://www.biorxiv.org/content/10.1101/2025.02.05.636716v1.full.pdf))*  

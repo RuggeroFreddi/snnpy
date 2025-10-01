@@ -425,6 +425,7 @@ class SNN:
         self.spike_matrix: Optional[np.ndarray] = None
         self.spike_matrix_output: Optional[np.ndarray] = None
         self.refractory_timer: np.ndarray = np.zeros(self.num_neurons, dtype=np.int32)
+        self.trace = np.zeros(self.num_neurons, dtype=np.float32)
 
         self.stdp = stdp_params
         if self.stdp and self.stdp.enabled:
@@ -647,8 +648,12 @@ class SNN:
             num_input_spikes = int(np.count_nonzero(self.input_spike_times))
             self.input_mean_current = float(num_input_spikes) / float(self.num_neurons * self.input_spike_times.shape[1])
 
-    def simulate(self) -> Optional[np.ndarray]:
+    def simulate(self, trace_tau = 10, reset_trace=False) -> np.ndarray:
         """Run the optimized simulation of the SNN."""
+        if trace_tau <= 0:
+            raise ValueError("'trace_tau' must be > 0.")
+        if reset_trace:
+            self.trace[:] = 0.0
         # --- sanity checks (lasciati invariati) ---
         if self.input_spike_times.shape[0] > self.num_neurons:
             warnings.warn(
@@ -700,6 +705,8 @@ class SNN:
         W = self.synaptic_weights.tocsr()
         indptr, indices, data = W.indptr, W.indices, W.data
 
+        decrease = float(np.exp(-self.time_step / trace_tau))
+
         self.tot_spikes = 0
         self.spike_matrix = np.zeros((T, N), dtype=np.int8)
         spikes_out = self.spike_matrix  # alias
@@ -720,6 +727,9 @@ class SNN:
 
             spk_idx = np.flatnonzero(spiking_mask)
             self.tot_spikes += spk_idx.size
+
+            self.trace *= decrease
+            self.trace[spk_idx] += 1.0
 
             if stdp and stdp.enabled:
                 self._stdp_decay_traces()
@@ -744,6 +754,10 @@ class SNN:
 
         self.spike_matrix_output = self.spike_matrix[:, out_idx]
         return self.spike_matrix_output
+
+    def get_trace(self) -> np.ndarray:
+        """Return neuron trace."""
+        return self.trace.copy()
 
     @require_simulation_run
     def get_spike_time_lists_output(self) -> List[List[int]]:
@@ -1045,6 +1059,7 @@ class SNN:
         self.spike_matrix_output = None
         self.refractory_timer = np.zeros(self.num_neurons, dtype=np.int32)
         self.membrane_potentials = self.membrane_potentials_init.copy()
+        self.trace[:] = 0.0 
 
     def prune(self, fraction: float) -> None:
         """Prune the weakest fraction of synapses (by absolute weight)."""
@@ -1088,7 +1103,7 @@ class SNN:
         if self.stdp and self.stdp.enabled:
             self._build_in_neighbors()
 
-    def compute_global_scalar_threshold(
+    def compute_critical_threshold(
         self, use_abs_weights: bool = False
     ) -> float:
         """Compute scalar threshold: W̄*N̄_in + 2*I*Tref."""
@@ -1111,9 +1126,9 @@ class SNN:
         threshold = mean_weight * mean_in_degree + two_I_Tref
         return float(threshold)
 
-    def apply_global_scalar_threshold(self, use_abs_weights: bool = False) -> float:
+    def apply_critical_threshold(self, use_abs_weights: bool = False) -> float:
         """Compute and set global scalar threshold and return it."""
-        threshold = self.compute_global_scalar_threshold(use_abs_weights=use_abs_weights)
+        threshold = self.compute_critical_threshold(use_abs_weights=use_abs_weights)
         self.membrane_threshold = float(threshold)
         return float(threshold)
 
