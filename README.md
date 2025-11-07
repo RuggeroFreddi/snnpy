@@ -91,9 +91,10 @@ A minimal end-to-end example is available here:
 
 ### ▶️ Simulation
 
-- `simulate()`  
-  Runs the simulation for the full duration and returns a 2D NumPy array (`np.ndarray`): 
-  Returns a binary matrix of shape `[time x output_neurons]`, where each row is a timestep and each column an output neuron (1 = spike, 0 = no spike).
+- `(self, trace_tau = 10, reset_trace=False)`  
+  Runs the simulation for the full duration and returns a 2D NumPy array (np.ndarray):<br>
+  Params: trace_tau (>0) is the exponential decay time constant (in time steps) for the per-neuron trace; reset_trace=True zeros the trace at the start of the run.
+  Returns: a binary matrix of shape [time x output_neurons], where each row is a timestep and each column an output neuron (1 = spike, 0 = no spike).
 
 - `get_spike_time_lists_output()`  
   Returns a list of lists: each sublist contains the timesteps at which each output neuron generated a spike.
