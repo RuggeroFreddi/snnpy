@@ -721,10 +721,6 @@ class SNN:
             spiking_mask = (mem >= self.membrane_threshold) & (refr == 0)
             spikes_out[t, :] = spiking_mask
 
-            if not spiking_mask.any():
-                mem *= leak_factor
-                continue
-
             spk_idx = np.flatnonzero(spiking_mask)
             self.tot_spikes += spk_idx.size
 
